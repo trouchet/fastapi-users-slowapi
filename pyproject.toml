@@ -3,11 +3,12 @@ name = "fastapi-users-slowapi"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi == 0.115.11",
     "uvicorn >= 0.34.0",
     "redis >= 3.5.3",
+    "apscheduler >= 3.10.4",
     "uv >= 0.5.1",
     "slowapi >= 0.1.9",
     "pydantic >= 2.8.2",
