@@ -1,17 +1,68 @@
+import pytest
+from datetime import timedelta
+from fastapi import status 
 
-from app.main import settings, revoke_token
+from app.main import (
+    settings, 
+    revoke_token, 
+    create_access_token,
+    decode_access_token,
+    is_token_revoked,
+    get_username_from_token,
+)
 
-from unittest.mock import Mock
-
-def test_revoke_token(mocker):
-    # Mocka apenas a instância de redis_client
-    mock_redis = mocker.patch("app.main.redis_client")
+def test_create_access_token():
+    data = {"sub": "john_doe"}
+    token = create_access_token(data)
+    assert isinstance(token, str)
     
-    # Define o comportamento do método setex
-    mock_redis.setex = Mock()
+    payload = decode_access_token(token)
+    assert payload["sub"] == "john_doe"
 
-    # Chama a função que queremos testar
-    revoke_token("fake_token")
+def test_expired_token():
+    data = {"sub": "john_doe"}
+    expired_token = create_access_token(data, expires_delta=timedelta(seconds=-1))
+    
+    with pytest.raises(Exception) as exc_info:
+        decode_access_token(expired_token)
+    
+    assert "Token has expired" in str(exc_info.value)
 
-    # Verifica se o Redis armazenou o token revogado com TTL
-    mock_redis.setex.assert_called_once_with("revoked_token:fake_token", settings.TOKEN_TTL, 1)
+def test_revoke_token(mock_redis):
+    token = create_access_token({"sub": "john_doe"})
+    mock_redis.setex.return_value = None
+    
+    revoke_token(token)
+    
+    mock_redis.setex.assert_called_once_with(f"revoked_token:{token}", settings.TOKEN_TTL, 1)
+    
+    mock_redis.get.return_value = b"1"
+    assert is_token_revoked(token) is True
+
+def test_valid_token_not_revoked(mock_redis):
+    token = create_access_token({"sub": "john_doe"})
+    mock_redis.get.return_value = None
+
+    assert is_token_revoked(token) is False
+
+def test_get_username_from_valid_token():
+    token = create_access_token({"sub": "john_doe"})
+    username = get_username_from_token(token)
+    assert username == "john_doe"
+
+def test_login_for_access_token(client):
+    response = client.post(
+        "/token",
+        json={"username": "john_doe", "password": "password123"}
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert "access_token" in response.json()
+
+    response = client.post(
+        "/token",
+        json={"username": "john_doe", "password": "wrongpassword"}
+    )
+    
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+

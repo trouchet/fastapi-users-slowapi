@@ -82,7 +82,7 @@ async def http_exception_handler(request, exc):
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     # Define the retry time (e.g., 60 seconds from now)
-    retry_after_time = datetime.utcnow() + timedelta(seconds=60)
+    retry_after_time = datetime.now() + timedelta(seconds=60)
     
     # Format retry time as an HTTP date
     retry_after_http_date = retry_after_time.strftime('%a, %d %b %Y %H:%M:%S GMT')
@@ -93,6 +93,14 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
         content={"error": f"Too many requests. Please try again later after {retry_after_http_date} UTC."},
         headers={"Retry-After": retry_after_http_date}
     )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"message": exc.detail}
+    )
+
 # Dependency to hash passwords
 pwd_context = passlib.context.CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -138,7 +146,12 @@ def validate_plan(allowed_plans):
     """
     def decorator(func):
         @wraps(func)
-        async def wrapper(request: Request, plan_and_user: tuple = Depends(get_current_plan), *args, **kwargs):
+        async def wrapper(
+            request: Request, 
+            plan_and_user: tuple = Depends(get_current_plan), 
+            *args, 
+            **kwargs
+        ):
             plan, user = plan_and_user
 
             if plan.name not in allowed_plans:
@@ -242,6 +255,7 @@ def get_current_plan(user: dict = Depends(get_current_user)):
 def get_username_from_token(token: str):
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+
         username = payload.get("sub")
         if not username or username not in fake_users_db:
             raise HTTPException(status_code=401, detail="Invalid token")
@@ -288,7 +302,9 @@ async def login_for_access_token(form_data: LoginRequest):
     user = get_user_from_username(form_data.username)
     if user is None or not verify_password(form_data.password, user["hashed_password"]):
         logger.warning(f"Failed login attempt for username: {form_data.username}")
+        logger.debug("Raising HTTP 401 Unauthorized")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
 
     access_token = create_access_token(data={"sub": form_data.username})
     return {"token_type": "bearer", "access_token": access_token}
