@@ -47,15 +47,15 @@ def start_scheduler():
     scheduler.start()
 
 @asynccontextmanager
-def lifespan(app_: FastAPI):
+async def lifespan(app_: FastAPI):
     start_scheduler()
     yield
 
 # Initialize FastAPI and SlowAPI Limiter
 app = FastAPI(
-    docs_url=f"docs",
-    openapi_url=f"openapi.json",
-    redoc_url=f"redoc",
+    docs_url=f"/docs",
+    openapi_url=f"/openapi.json",
+    redoc_url=f"/redoc",
     lifespan=lifespan
 )
 
@@ -81,12 +81,19 @@ async def http_exception_handler(request, exc):
     return JSONResponse({"message": f"Error occurred: {exc.detail}"})
 
 @app.exception_handler(RateLimitExceeded)
-def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    # Define the retry time (e.g., 60 seconds from now)
+    retry_after_time = datetime.utcnow() + timedelta(seconds=60)
+    
+    # Format retry time as an HTTP date
+    retry_after_http_date = retry_after_time.strftime('%a, %d %b %Y %H:%M:%S GMT')
+    
+    # Return a JSON response with the Retry-After header
     return JSONResponse(
         status_code=429,
-        content={"error": "Too many requests. Please try again later."},
+        content={"error": f"Too many requests. Please try again later after {retry_after_http_date} UTC."},
+        headers={"Retry-After": retry_after_http_date}
     )
-
 # Dependency to hash passwords
 pwd_context = passlib.context.CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -182,14 +189,11 @@ plan_limits = {
     "admin": "9999/min"
 }
 
-
 def is_token_revoked(token: str) -> bool:
-    """
-    Check if the token is in the revoked tokens list.
-    Returns True if the token is revoked, False otherwise.
-    """
-    return redis_client.exists(f"revoked_token:{token}") > 0
-
+    revoked = redis_client.get(f"revoked_token:{token}")
+    
+    # Explicitly check if the value is None or an empty string
+    return bool(revoked)
 
 def revoke_token(token: str):
     """
@@ -202,12 +206,13 @@ def revoke_token(token: str):
 # Function to decode the token and check for revocation
 def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
+        
         # Check if the token is revoked
         if is_token_revoked(token):
             logger.warning("Attempted access with a revoked token.")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
         
-        # Decode the token and get the username
+        # Proceed with decoding and further checks...
         payload = decode_access_token(token)
         username = payload.get("sub")
         
@@ -221,7 +226,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         logger.error(f"JWT decoding error: {e}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     
-    # Retrieve the user based on username
+    # Further logic to retrieve and return the user
     user = fake_users_db.get(username)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
@@ -259,7 +264,6 @@ def dynamic_rate_limit(request: Request = None) -> str:
         return settings.DEFAULT_RATE_LIMIT
     
     auth_header = request.headers.get("Authorization")
-    print(auth_header)
     
     if not auth_header:
         return settings.DEFAULT_RATE_LIMIT
@@ -281,7 +285,7 @@ def dynamic_rate_limit(request: Request = None) -> str:
 
 # Simplified login endpoint
 @app.post("/token")
-def login_for_access_token(form_data: LoginRequest):
+async def login_for_access_token(form_data: LoginRequest):
     user = get_user_from_username(form_data.username)
     if user is None or not verify_password(form_data.password, user["hashed_password"]):
         logger.warning(f"Failed login attempt for username: {form_data.username}")
@@ -292,14 +296,14 @@ def login_for_access_token(form_data: LoginRequest):
 
 # Simplified refresh token endpoint
 @app.post("/refresh")
-def refresh_token(refresh_token: str):
+async def refresh_token(refresh_token: str):
     username = get_username_from_token(refresh_token)
     new_access_token = create_access_token({"sub": username})
     return {"token_type": "bearer", "access_token": new_access_token}
 
 @app.post("/logout")
 @limiter.limit(dynamic_rate_limit)
-def logout(
+async def logout(
     request: Request, 
     token: str = Depends(oauth2_scheme)
 ):
@@ -318,7 +322,7 @@ async def revoke_token(token: str):
 
 # Example of checking if a token is revoked
 @app.get("/is_token_revoked/{token}")
-async def is_token_revoked(token: str):
+async def is_token_revoked_endpoint(token: str):
     """
     Check if a token is revoked.
     """
@@ -365,7 +369,7 @@ async def premium_only_endpoint(
 
 @app.get("/users/me")
 @limiter.limit(dynamic_rate_limit)
-def read_users_me(
+async def read_users_me(
     request: Request, 
     current_user: dict = Depends(get_current_user)
 ):
