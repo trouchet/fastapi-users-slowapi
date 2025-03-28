@@ -10,7 +10,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import Limiter
 
 from jose import JWTError, jwt, ExpiredSignatureError
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import BaseModel
 import passlib.context
 from redis import Redis, ConnectionPool
@@ -29,8 +29,7 @@ class Settings(BaseSettings):
     TOKEN_TTL: int = 60 * 60
     REDIS_URI: str = "redis://redis:6379/0"
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
 settings = Settings()
 
@@ -53,9 +52,9 @@ async def lifespan(app_: FastAPI):
 
 # Initialize FastAPI and SlowAPI Limiter
 app = FastAPI(
-    docs_url=f"/docs",
-    openapi_url=f"/openapi.json",
-    redoc_url=f"/redoc",
+    docs_url="/docs",
+    openapi_url="/openapi.json",
+    redoc_url="/redoc",
     lifespan=lifespan
 )
 
@@ -312,8 +311,8 @@ async def logout(
     return {"message": "Successfully logged out"}
 
 # Example of revoking a token
-@app.post("/revoke_token/{token}")
-async def revoke_token(token: str):
+@app.post("/revoke/{token}")
+async def revoke_token_endpoint(token: str):
     """
     Revoke a token by adding it to Redis with a TTL
     """
