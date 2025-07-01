@@ -66,3 +66,8 @@ def test_login_for_access_token(client):
     
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
+def test_health_endpoint(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+

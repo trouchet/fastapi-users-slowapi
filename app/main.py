@@ -327,7 +327,7 @@ async def logout(
     return {"message": "Successfully logged out"}
 
 # Example of revoking a token
-@app.post("/revoke/{token}")
+@app.post("/revoke")
 async def revoke_token_endpoint(token: str):
     """
     Revoke a token by adding it to Redis with a TTL
@@ -336,7 +336,7 @@ async def revoke_token_endpoint(token: str):
     return {"message": f"Token {token} revoked successfully"}
 
 # Example of checking if a token is revoked
-@app.get("/is_token_revoked/{token}")
+@app.get("/is_token_revoked")
 async def is_token_revoked_endpoint(token: str):
     """
     Check if a token is revoked.
@@ -396,3 +396,7 @@ async def read_users_me(
 @limiter.limit(dynamic_rate_limit)
 async def rate_limit_status(request: Request):
     return {"message": "Check the logs for rate limit info."}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
