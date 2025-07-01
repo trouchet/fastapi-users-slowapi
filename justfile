@@ -8,12 +8,17 @@ build:
 up:
   docker compose up -d
 
+# Task to build and run the Docker container
+deploy:
+  just build
+  just up
+
 # Task to down the FastAPI app from a Docker container
 down:
   docker compose down
 
 # Task to build and run the Docker container (for quick start)
-build_and_up:
+restart:
   just down
   just build
   just up
