@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: timedelta = timedelta(minutes=24 * 60)
     CLEANUP_INTERVAL_MINUTES: int = 10
-    DEFAULT_RATE_LIMIT: str = "5/minute"
+    DEFAULT_PLAN: str = "free"
     TOKEN_TTL: int = 60 * 60
     REDIS_URI: str = "redis://redis:6379/0"
 
@@ -47,6 +47,12 @@ def start_scheduler():
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
+    # Clear all Redis keys related to rate limiting and revoked tokens on startup
+    try:
+        redis_client.flushdb()
+        logger.info("Redis database flushed on startup.")
+    except Exception as e:
+        logger.warning(f"Could not flush Redis database on startup: {e}")
     start_scheduler()
     yield
 
@@ -62,10 +68,10 @@ app = FastAPI(
 pool = ConnectionPool.from_url(settings.REDIS_URI)
 redis_client = Redis(connection_pool=pool)
 
+# Remove default_limits to ensure only dynamic per-route limits are used
 limiter = Limiter(
     key_func=get_remote_address,
-    storage_uri=settings.REDIS_URI,
-    default_limits=settings.DEFAULT_RATE_LIMIT 
+    storage_uri="memory://"
 )
 app.state.limiter = limiter 
 
@@ -196,8 +202,8 @@ fake_users_db = {
 
 # Define rate limits based on the plan
 plan_limits = {
-    "free": "5/min",
-    "premium": "6/min",
+    "free": "2/min",
+    "premium": "10/min",
     "admin": "9999/min"
 }
 
@@ -248,7 +254,10 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 # Dependency to get the current user's plan and rate limit (returns a tuple: (Plan, user))
 def get_current_plan(user: dict = Depends(get_current_user)):
     plan = user["plan"]
-    rate_limit = plan_limits.get(plan, settings.DEFAULT_RATE_LIMIT)
+    logger.info(f"get_current_plan: user={user}, plan={plan}")
+    rate_limit = plan_limits.get(plan, settings.DEFAULT_PLAN)
+    logger.info(f"get_current_plan: plan_limits={plan_limits}")
+    logger.info(f"get_current_plan: rate_limit={rate_limit}")
     return Plan(name=plan, rate_limit=rate_limit), user
 
 # Common function to validate the user and retrieve username
@@ -270,16 +279,16 @@ def get_username_from_token(token: str):
 def get_user_from_username(username: str):
     return fake_users_db.get(username)
 
-# Custom function to dynamically compute the rate limit based on the request.
-# We give 'request' a default value of None so that if SlowAPI calls it with no arguments, it won't error.
-def dynamic_rate_limit(request: Request = None) -> str:
+def get_plan_from_request(request: Request = None):
     if request is None:
-        return settings.DEFAULT_RATE_LIMIT
+        logger.debug("dynamic_rate_limit: request is None, using default rate limit")
+        return settings.DEFAULT_PLAN
     
     auth_header = request.headers.get("Authorization")
     
     if not auth_header:
-        return settings.DEFAULT_RATE_LIMIT
+        logger.debug("dynamic_rate_limit: No Authorization header, using default plan")
+        return settings.DEFAULT_PLAN
     token = auth_header.replace("Bearer ", "")
 
     # Decode token to get username
@@ -287,14 +296,23 @@ def dynamic_rate_limit(request: Request = None) -> str:
         payload = decode_access_token(token)
         username = payload.get("sub")  # "sub" is typically used for user identification
     except HTTPException:
-        return settings.DEFAULT_RATE_LIMIT  # Default to lowest rate if token is invalid
+        logger.debug("dynamic_rate_limit: Invalid token, using default plan")
+        return settings.DEFAULT_PLAN  # Default to lowest rate if token is invalid
     
     user = fake_users_db.get(username)
     if not user:
-        return settings.DEFAULT_RATE_LIMIT
+        logger.debug(f"dynamic_rate_limit: User '{username}' not found, using default rate limit")
+        return settings.DEFAULT_PLAN
+    
+    plan = user.get("plan", settings.DEFAULT_PLAN)
+    logger.info(f"dynamic_rate_limit: username={username}, plan={plan}")
 
-    plan = user.get("plan", "free")
-    return plan_limits.get(plan, settings.DEFAULT_RATE_LIMIT)
+    return plan
+
+# Custom function to dynamically compute the rate limit based on the request.
+# We give 'request' a default value of None so that if SlowAPI calls it with no arguments, it won't error.
+def dynamic_rate_limit(plan: str = settings.DEFAULT_PLAN) -> str:    
+    return plan_limits.get(plan)
 
 # Simplified login endpoint
 @app.post("/token")
