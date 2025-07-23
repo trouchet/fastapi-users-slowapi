@@ -202,9 +202,9 @@ fake_users_db = {
 
 # Define rate limits based on the plan
 plan_limits = {
-    "free": "2/min",
-    "premium": "10/min",
-    "admin": "9999/min"
+    "free": "2/minute",
+    "premium": "10/minute",
+    "admin": "9999/minute"
 }
 
 def is_token_revoked(token: str) -> bool:
