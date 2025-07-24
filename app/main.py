@@ -68,13 +68,6 @@ app = FastAPI(
 pool = ConnectionPool.from_url(settings.REDIS_URI)
 redis_client = Redis(connection_pool=pool)
 
-# Remove default_limits to ensure only dynamic per-route limits are used
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri="memory://"
-)
-app.state.limiter = limiter 
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -203,7 +196,7 @@ fake_users_db = {
 # Define rate limits based on the plan
 plan_limits = {
     "free": "2/minute",
-    "premium": "10/minute",
+    "premium": "5/minute",
     "admin": "9999/minute"
 }
 
@@ -279,40 +272,38 @@ def get_username_from_token(token: str):
 def get_user_from_username(username: str):
     return fake_users_db.get(username)
 
-def get_plan_from_request(request: Request = None):
-    if request is None:
-        logger.debug("dynamic_rate_limit: request is None, using default rate limit")
-        return settings.DEFAULT_PLAN
-    
-    auth_header = request.headers.get("Authorization")
-    
-    if not auth_header:
-        logger.debug("dynamic_rate_limit: No Authorization header, using default plan")
-        return settings.DEFAULT_PLAN
-    token = auth_header.replace("Bearer ", "")
+# Key function for SlowAPI: extract username from Authorization header
 
-    # Decode token to get username
+def get_username_from_request(request: Request):
+    auth_header = request.headers.get("Authorization")
+    logger.info(f"get_username_from_request: auth_header={auth_header}")
+    if not auth_header:
+        return "anonymous"
+    
+    token = auth_header.replace("Bearer ", "")
     try:
         payload = decode_access_token(token)
-        username = payload.get("sub")  # "sub" is typically used for user identification
-    except HTTPException:
-        logger.debug("dynamic_rate_limit: Invalid token, using default plan")
-        return settings.DEFAULT_PLAN  # Default to lowest rate if token is invalid
-    
-    user = fake_users_db.get(username)
-    if not user:
-        logger.debug(f"dynamic_rate_limit: User '{username}' not found, using default rate limit")
-        return settings.DEFAULT_PLAN
-    
-    plan = user.get("plan", settings.DEFAULT_PLAN)
-    logger.info(f"dynamic_rate_limit: username={username}, plan={plan}")
+        username = payload.get("sub")
+        logger.info(f"get_username_from_request: username={username}")
+        return username or "anonymous"
+    except Exception:
+        return "anonymous"
 
-    return plan
+# Dynamic rate limit function: takes username, returns rate string
 
-# Custom function to dynamically compute the rate limit based on the request.
-# We give 'request' a default value of None so that if SlowAPI calls it with no arguments, it won't error.
-def dynamic_rate_limit(plan: str = settings.DEFAULT_PLAN) -> str:    
-    return plan_limits.get(plan)
+def dynamic_rate_limit(key: str):
+    user = fake_users_db.get(key)
+    plan = user.get("plan", settings.DEFAULT_PLAN) if user else settings.DEFAULT_PLAN
+    rate_limit = plan_limits.get(plan, plan_limits[settings.DEFAULT_PLAN])
+    logger.info(f"dynamic_rate_limit: username={key}, plan={plan}, rate_limit={rate_limit}")
+    return rate_limit
+
+# Remove default_limits to ensure only dynamic per-route limits are used
+limiter = Limiter(
+    key_func=get_username_from_request,
+    storage_uri="memory://"
+)
+app.state.limiter = limiter 
 
 # Simplified login endpoint
 @app.post("/token")
